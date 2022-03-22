@@ -12,6 +12,8 @@ use clap::Parser;
     setting(clap::AppSettings::NextLineHelp)
 )]
 pub(crate) struct Opts {
+    #[clap(long, short, default_value = "3030")]
+    pub http_port: u16,
     #[clap(subcommand)]
     pub chain_id: ChainId,
 }

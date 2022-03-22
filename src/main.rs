@@ -20,6 +20,7 @@ async fn main() -> Result<(), tokio::io::Error> {
     init_tracing();
 
     let opts: Opts = Opts::parse();
+    let http_port = opts.http_port.clone();
 
     let config: LakeConfig = opts.chain_id.into();
     let stream = near_lake_framework::streamer(config);
@@ -43,7 +44,7 @@ async fn main() -> Result<(), tokio::io::Error> {
     HttpServer::new(|| {
         App::new().service(metrics)
     })
-    .bind(("127.0.0.1", 3030))?
+    .bind(("0.0.0.0", http_port))?
     .run()
     .await
     .unwrap();
