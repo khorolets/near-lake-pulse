@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use actix_web::{get, App, HttpServer, Responder};
 use clap::Parser;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use prometheus::{Encoder, IntGauge, IntCounter};
+use prometheus::{Encoder, IntGauge, IntCounter, Gauge};
+use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 use near_lake_framework::LakeConfig;
@@ -13,6 +16,24 @@ mod configs;
 lazy_static! {
     static ref LATEST_BLOCK_HEIGHT: IntGauge = IntGauge::new("pulse_latest_block", "Latest known block height").unwrap();
     static ref BLOCKS_INDEXED: IntCounter = IntCounter::new("pulse_blocks_indexed", "Number of indexed blocks").unwrap();
+    static ref BPS: Gauge = Gauge::new("pulse_bps", "Blocks per second").unwrap();
+}
+
+#[derive(Debug, Clone)]
+struct Stats {
+    pub blocks_processed_count: u64,
+    pub last_processed_block_height: u64,
+    pub bps: f64,
+}
+
+impl Stats {
+    pub fn new() -> Self {
+        Self {
+            blocks_processed_count: 0,
+            last_processed_block_height: 0,
+            bps: 0.0,
+        }
+    }
 }
 
 #[tokio::main]
@@ -32,10 +53,20 @@ async fn main() -> Result<(), tokio::io::Error> {
     prometheus::default_registry()
         .register(Box::new(BLOCKS_INDEXED.clone()))
         .unwrap();
+    prometheus::default_registry()
+        .register(Box::new(BPS.clone()))
+        .unwrap();
+
+    let stats: Arc<Mutex<Stats>> = Arc::new(Mutex::new(Stats::new()));
+
+    tokio::spawn(stats_watcher(Arc::clone(&stats)));
 
     tokio::spawn(async move {
         let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)
-            .map(|streamer_message| handle_streamer_message(streamer_message))
+            .map(|streamer_message| handle_streamer_message(
+                streamer_message,
+                Arc::clone(&stats)
+            ))
             .buffer_unordered(1usize);
 
         while let Some(_handle_message) = handlers.next().await {}
@@ -54,9 +85,15 @@ async fn main() -> Result<(), tokio::io::Error> {
 
 async fn handle_streamer_message(
     streamer_message: near_lake_framework::near_indexer_primitives::StreamerMessage,
+    stats: Arc<Mutex<Stats>>,
 ) {
     BLOCKS_INDEXED.inc();
     LATEST_BLOCK_HEIGHT.set(streamer_message.block.header.height.try_into().unwrap());
+    let mut stats_lock = stats.lock().await;
+    BPS.set(stats_lock.bps);
+    stats_lock.blocks_processed_count += 1;
+    stats_lock.last_processed_block_height = streamer_message.block.header.height;
+    drop(stats_lock);
     eprintln!(
         "{} / shards {}",
         streamer_message.block.header.height,
@@ -77,6 +114,26 @@ async fn metrics() -> impl Responder {
         }
     }
     format!("{}", String::from_utf8(buffer.clone()).unwrap())
+}
+
+async fn stats_watcher(stats: Arc<Mutex<Stats>>) {
+    let interval_secs = 10;
+    let mut prev_blocks_processed_count: u64 = 0;
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+        let stats_lock = stats.lock().await;
+        let stats_copy = stats_lock.clone();
+        drop(stats_lock);
+
+        let block_processing_speed: f64 = ((stats_copy.blocks_processed_count
+            - prev_blocks_processed_count) as f64)
+            / (interval_secs as f64);
+        let mut stats_lock = stats.lock().await;
+        stats_lock.bps = block_processing_speed;
+        drop(stats_lock);
+        prev_blocks_processed_count = stats_copy.blocks_processed_count;
+    }
 }
 
 fn init_tracing() {
