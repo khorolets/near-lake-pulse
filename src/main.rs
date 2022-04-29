@@ -4,18 +4,26 @@ use actix_web::{get, App, HttpServer, Responder};
 use clap::Parser;
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use prometheus::{Encoder, IntGauge, IntCounter, Gauge};
+use prometheus::{Encoder, Gauge, IntCounter, IntGauge};
+use teloxide::{
+    payloads::SendMessageSetters,
+    requests::{Request, Requester},
+    types::ParseMode,
+    Bot,
+};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
-use near_lake_framework::LakeConfig;
 use configs::Opts;
+use near_lake_framework::LakeConfig;
 
 mod configs;
 
 lazy_static! {
-    static ref LATEST_BLOCK_HEIGHT: IntGauge = IntGauge::new("pulse_latest_block", "Latest known block height").unwrap();
-    static ref BLOCKS_INDEXED: IntCounter = IntCounter::new("pulse_blocks_indexed", "Number of indexed blocks").unwrap();
+    static ref LATEST_BLOCK_HEIGHT: IntGauge =
+        IntGauge::new("pulse_latest_block", "Latest known block height").unwrap();
+    static ref BLOCKS_INDEXED: IntCounter =
+        IntCounter::new("pulse_blocks_indexed", "Number of indexed blocks").unwrap();
     static ref BPS: Gauge = Gauge::new("pulse_bps", "Blocks per second").unwrap();
 }
 
@@ -24,6 +32,7 @@ struct Stats {
     pub blocks_processed_count: u64,
     pub last_processed_block_height: u64,
     pub bps: f64,
+    pub state: State,
 }
 
 impl Stats {
@@ -32,8 +41,15 @@ impl Stats {
             blocks_processed_count: 0,
             last_processed_block_height: 0,
             bps: 0.0,
+            state: State::Operating,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+enum State {
+    Alerting,
+    Operating,
 }
 
 #[tokio::main]
@@ -41,9 +57,12 @@ async fn main() -> Result<(), tokio::io::Error> {
     init_tracing();
 
     let opts: Opts = Opts::parse();
+    let telegram_token = opts.telegram_token;
+    let chat_ids = opts.chat_id.clone();
     let http_port = opts.http_port.clone();
 
     let config: LakeConfig = opts.chain_id.into();
+    let config_string = format!("Chain_id: {}", config.s3_bucket_name);
     let stream = near_lake_framework::streamer(config);
 
     // Register custom metrics to a custom registry.
@@ -58,27 +77,32 @@ async fn main() -> Result<(), tokio::io::Error> {
         .unwrap();
 
     let stats: Arc<Mutex<Stats>> = Arc::new(Mutex::new(Stats::new()));
+    if let Some(token) = telegram_token {
+        if chat_ids.len() > 0 {
+            let bot = Bot::new(token);
 
-    tokio::spawn(stats_watcher(Arc::clone(&stats)));
+            tokio::spawn(stats_watcher(
+                Arc::clone(&stats),
+                bot,
+                config_string,
+                chat_ids,
+            ));
+        }
+    }
 
     tokio::spawn(async move {
         let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)
-            .map(|streamer_message| handle_streamer_message(
-                streamer_message,
-                Arc::clone(&stats)
-            ))
+            .map(|streamer_message| handle_streamer_message(streamer_message, Arc::clone(&stats)))
             .buffer_unordered(1usize);
 
         while let Some(_handle_message) = handlers.next().await {}
     });
 
-    HttpServer::new(|| {
-        App::new().service(metrics)
-    })
-    .bind(("0.0.0.0", http_port))?
-    .run()
-    .await
-    .unwrap();
+    HttpServer::new(|| App::new().service(metrics))
+        .bind(("0.0.0.0", http_port))?
+        .run()
+        .await
+        .unwrap();
 
     Ok(())
 }
@@ -116,9 +140,15 @@ async fn metrics() -> impl Responder {
     format!("{}", String::from_utf8(buffer.clone()).unwrap())
 }
 
-async fn stats_watcher(stats: Arc<Mutex<Stats>>) {
+async fn stats_watcher(
+    stats: Arc<Mutex<Stats>>,
+    bot: Bot,
+    config_string: String,
+    chat_ids: Vec<String>,
+) {
     let interval_secs = 10;
     let mut prev_blocks_processed_count: u64 = 0;
+    let mut prev_state: State;
 
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
@@ -131,13 +161,57 @@ async fn stats_watcher(stats: Arc<Mutex<Stats>>) {
             / (interval_secs as f64);
         let mut stats_lock = stats.lock().await;
         stats_lock.bps = block_processing_speed;
-        drop(stats_lock);
         prev_blocks_processed_count = stats_copy.blocks_processed_count;
+        prev_state = stats_copy.state;
+
+        match prev_state {
+            State::Alerting => {
+                if block_processing_speed > 0.0 {
+                    stats_lock.state = State::Operating;
+                    for chat_id in chat_ids.iter() {
+                        bot.send_message(
+                            chat_id.to_string(),
+                            format!(
+                                "<b>Resolved</b> {}\n BPS is {}",
+                                &config_string, block_processing_speed,
+                            ),
+                        )
+                        // Optional parameters can be supplied by calling setters
+                        .parse_mode(ParseMode::Html)
+                        // To send request to telegram you need to call `.send()` and await the resulting future
+                        .send()
+                        .await
+                        .unwrap();
+                    }
+                }
+            }
+            _ => {
+                if block_processing_speed <= 0.0 {
+                    stats_lock.state = State::Alerting;
+                    for chat_id in chat_ids.iter() {
+                        bot.send_message(
+                            chat_id.to_string(),
+                            format!(
+                                "<b>Alert!</b> BPS dropped to {}\n{}",
+                                block_processing_speed, &config_string,
+                            ),
+                        )
+                        // Optional parameters can be supplied by calling setters
+                        .parse_mode(ParseMode::Html)
+                        // To send request to telegram you need to call `.send()` and await the resulting future
+                        .send()
+                        .await
+                        .unwrap();
+                    }
+                }
+            }
+        };
+        drop(stats_lock);
     }
 }
 
 fn init_tracing() {
-    let mut env_filter = EnvFilter::new("near_lake_framework=debug");
+    let mut env_filter = EnvFilter::new("near_lake_framework=info");
 
     if let Ok(rust_log) = std::env::var("RUST_LOG") {
         if !rust_log.is_empty() {

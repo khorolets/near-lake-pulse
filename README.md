@@ -8,6 +8,8 @@ It is a simple NEAR Lake indexer that just prints the block heights and exposes 
 It is supposed to be used for healthcheck and check that the data we've reindexed to the AWS S3 buckets is consistent and doesn't have
 any gaps.
 
+And also it can send alert notifications via TelegramBot (optional) if blocks per second rate drop to zero.
+
 ## Usage
 
 **Don't forget** you need to have `~/.aws/credentials` with your AWS credentials
@@ -15,7 +17,6 @@ any gaps.
 Basic:
 
 `./target/release/near-lake-pulse <chain_id> --block-height <BLOCK_HEIGHT>`
-
 
 Mainnet:
 
@@ -25,3 +26,6 @@ Testnet
 
 `./target/release/near-lake-pulse mainnet --block-height 85635752`
 
+With alerts:
+
+`./target/release/near-lake-pulse --telegram-token 123456789:blablabla --chat-id 1234567 --http-port 3030 mainnet --block-height 85635752`

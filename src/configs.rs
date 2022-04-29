@@ -14,6 +14,10 @@ use clap::Parser;
 pub(crate) struct Opts {
     #[clap(long, short, default_value = "3030")]
     pub http_port: u16,
+    #[clap(long)]
+    pub telegram_token: Option<String>,
+    #[clap(long)]
+    pub chat_id: Vec<String>,
     #[clap(subcommand)]
     pub chain_id: ChainId,
 }
