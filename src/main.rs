@@ -32,7 +32,6 @@ struct Stats {
     pub blocks_processed_count: u64,
     pub last_processed_block_height: u64,
     pub bps: f64,
-    pub state: State,
 }
 
 impl Stats {
@@ -41,12 +40,11 @@ impl Stats {
             blocks_processed_count: 0,
             last_processed_block_height: 0,
             bps: 0.0,
-            state: State::Operating,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum State {
     Alerting,
     Operating,
@@ -60,6 +58,7 @@ async fn main() -> Result<(), tokio::io::Error> {
     let telegram_token = opts.telegram_token;
     let chat_ids = opts.chat_id.clone();
     let http_port = opts.http_port.clone();
+    let stats_interval_sec = opts.stats_interval_sec.clone();
 
     let config: LakeConfig = opts.chain_id.into();
     let config_string = format!("Chain_id: {}", config.s3_bucket_name);
@@ -86,6 +85,7 @@ async fn main() -> Result<(), tokio::io::Error> {
                 bot,
                 config_string,
                 chat_ids,
+                stats_interval_sec,
             ));
         }
     }
@@ -145,29 +145,26 @@ async fn stats_watcher(
     bot: Bot,
     config_string: String,
     chat_ids: Vec<String>,
+    interval_secs: u64,
 ) {
-    let interval_secs = 10;
     let mut prev_blocks_processed_count: u64 = 0;
-    let mut prev_state: State;
+    let mut prev_state: State = State::Operating;
 
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
-        let stats_lock = stats.lock().await;
-        let stats_copy = stats_lock.clone();
-        drop(stats_lock);
+        let mut stats_lock = stats.lock().await;
 
-        let block_processing_speed: f64 = ((stats_copy.blocks_processed_count
+        let block_processing_speed: f64 = ((stats_lock.blocks_processed_count
             - prev_blocks_processed_count) as f64)
             / (interval_secs as f64);
-        let mut stats_lock = stats.lock().await;
         stats_lock.bps = block_processing_speed;
-        prev_blocks_processed_count = stats_copy.blocks_processed_count;
-        prev_state = stats_copy.state;
+        prev_blocks_processed_count = stats_lock.blocks_processed_count;
+        drop(stats_lock);
 
         match prev_state {
             State::Alerting => {
                 if block_processing_speed > 0.0 {
-                    stats_lock.state = State::Operating;
+                    prev_state = State::Operating;
                     for chat_id in chat_ids.iter() {
                         bot.send_message(
                             chat_id.to_string(),
@@ -187,7 +184,7 @@ async fn stats_watcher(
             }
             _ => {
                 if block_processing_speed <= 0.0 {
-                    stats_lock.state = State::Alerting;
+                    prev_state = State::Alerting;
                     for chat_id in chat_ids.iter() {
                         bot.send_message(
                             chat_id.to_string(),
@@ -206,7 +203,6 @@ async fn stats_watcher(
                 }
             }
         };
-        drop(stats_lock);
     }
 }
 

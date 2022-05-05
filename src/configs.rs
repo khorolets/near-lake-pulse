@@ -18,6 +18,8 @@ pub(crate) struct Opts {
     pub telegram_token: Option<String>,
     #[clap(long)]
     pub chat_id: Vec<String>,
+    #[clap(long, default_value = "10")]
+    pub stats_interval_sec: u64,
     #[clap(subcommand)]
     pub chain_id: ChainId,
 }
