@@ -28,7 +28,6 @@ pub(crate) struct Opts {
 pub(crate) enum ChainId {
     Mainnet(RunArgs),
     Testnet(RunArgs),
-    Localnet(RunArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -40,25 +39,18 @@ pub(crate) struct RunArgs {
 
 impl From<ChainId> for near_lake_framework::LakeConfig {
     fn from(chain: ChainId) -> near_lake_framework::LakeConfig {
+        let config_builder = near_lake_framework::LakeConfigBuilder::default();
+
         match chain {
-            ChainId::Mainnet(args) => near_lake_framework::LakeConfig {
-                s3_endpoint: None,
-                s3_bucket_name: "near-lake-data-mainnet".to_string(),
-                s3_region_name: "eu-central-1".to_string(),
-                start_block_height: args.block_height,
-            },
-            ChainId::Testnet(args) => near_lake_framework::LakeConfig {
-                s3_endpoint: None,
-                s3_bucket_name: "near-lake-data-testnet".to_string(),
-                s3_region_name: "eu-central-1".to_string(),
-                start_block_height: args.block_height,
-            },
-            ChainId::Localnet(args) => near_lake_framework::LakeConfig {
-                s3_endpoint: None,
-                s3_bucket_name: "near-lake-data-localnet".to_string(),
-                s3_region_name: "eu-central-1".to_string(),
-                start_block_height: args.block_height,
-            },
+            ChainId::Mainnet(args) => config_builder
+                .mainnet()
+                .start_block_height(args.block_height)
+                .build(),
+            ChainId::Testnet(args) => config_builder
+                .testnet()
+                .start_block_height(args.block_height)
+                .build(),
         }
+        .expect("Failed to build LakeConfig")
     }
 }

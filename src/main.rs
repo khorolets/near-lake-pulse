@@ -57,12 +57,12 @@ async fn main() -> Result<(), tokio::io::Error> {
     let opts: Opts = Opts::parse();
     let telegram_token = opts.telegram_token;
     let chat_ids = opts.chat_id.clone();
-    let http_port = opts.http_port.clone();
-    let stats_interval_sec = opts.stats_interval_sec.clone();
+    let http_port = opts.http_port;
+    let stats_interval_sec = opts.stats_interval_sec;
 
     let config: LakeConfig = opts.chain_id.into();
     let config_string = format!("Chain_id: {}", config.s3_bucket_name);
-    let stream = near_lake_framework::streamer(config);
+    let (_, stream) = near_lake_framework::streamer(config);
 
     // Register custom metrics to a custom registry.
     prometheus::default_registry()
@@ -77,7 +77,7 @@ async fn main() -> Result<(), tokio::io::Error> {
 
     let stats: Arc<Mutex<Stats>> = Arc::new(Mutex::new(Stats::new()));
     if let Some(token) = telegram_token {
-        if chat_ids.len() > 0 {
+        if !chat_ids.is_empty() {
             let bot = Bot::new(token);
 
             tokio::spawn(stats_watcher(
@@ -137,7 +137,7 @@ async fn metrics() -> impl Responder {
             }
         }
     }
-    format!("{}", String::from_utf8(buffer.clone()).unwrap())
+    String::from_utf8(buffer.clone()).unwrap()
 }
 
 async fn stats_watcher(
