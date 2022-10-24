@@ -37,6 +37,15 @@ pub(crate) struct RunArgs {
     pub block_height: u64,
 }
 
+impl Opts {
+    pub fn chain_id(&self) -> &str {
+        match self.chain_id {
+            ChainId::Mainnet(_) => "mainnet",
+            ChainId::Testnet(_) => "testnet",
+        }
+    }
+}
+
 impl From<ChainId> for near_lake_framework::LakeConfig {
     fn from(chain: ChainId) -> near_lake_framework::LakeConfig {
         let config_builder = near_lake_framework::LakeConfigBuilder::default();

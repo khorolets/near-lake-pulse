@@ -55,13 +55,13 @@ async fn main() -> Result<(), tokio::io::Error> {
     init_tracing();
 
     let opts: Opts = Opts::parse();
-    let telegram_token = opts.telegram_token;
+    let telegram_token = opts.telegram_token.clone();
     let chat_ids = opts.chat_id.clone();
     let http_port = opts.http_port;
     let stats_interval_sec = opts.stats_interval_sec;
 
+    let config_string = format!("Chain_id: {}", opts.chain_id());
     let config: LakeConfig = opts.chain_id.into();
-    let config_string = format!("Chain_id: {}", config.s3_bucket_name);
     let (_, stream) = near_lake_framework::streamer(config);
 
     // Register custom metrics to a custom registry.
