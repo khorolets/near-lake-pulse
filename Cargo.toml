@@ -2,7 +2,7 @@
 name = "near-lake-pulse"
 version = "0.2.1"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.64.0"
 
 [dependencies]
 actix-web = "=4.0.1"
